@@ -1,0 +1,5 @@
+node_modules/
+dist/
+*.tsbuildinfo
+data/items-source.json
+data/items-formatted-source.json
