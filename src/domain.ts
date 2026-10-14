@@ -186,13 +186,14 @@ export function emptyState(): AppState {
 
 export function recipeFor(project: Project, catalog: CatalogItem[]) {
   const item = catalog.find((entry) => entry.id === project.itemId);
-  return { item, recipe: item?.recipes.find((entry) => entry.id === project.recipeId) || item?.recipes[0] };
+  const recipe = item?.recipes.find((entry) => entry.id === project.recipeId) || item?.recipes[0];
+  return { item, recipe: recipe ? { ...recipe, outputCount: 1 } : undefined };
 }
 
 export function recipeRequirements(recipe: Recipe, quantity: number, returnRate = 0): Map<string, Material> {
   const needed = new Map<string, Material>();
   if (quantity <= 0) return needed;
-  const craftRuns = Math.ceil(quantity / Math.max(1, recipe.outputCount));
+  const craftRuns = Math.ceil(quantity);
   for (const material of recipe.materials) {
     const raw = material.count * craftRuns;
     const rate = material.returnable ? Math.min(1, Math.max(0, returnRate)) : 0;
@@ -306,7 +307,7 @@ export function projectMaterials(state: AppState, project: Project, catalog: Cat
     const alreadyExpected = recipeRequirements(recipe, project.crafted, rate).get(material.id)?.count || 0;
     const remainingNet = Math.max(0, (projectNeeds.get(material.id)?.count || 0) - alreadyExpected);
     const firstCraftInputs = project.target > project.crafted
-      ? recipeRequirements(recipe, Math.min(Math.max(1, recipe.outputCount), project.target - project.crafted)).get(material.id)?.count || 0
+      ? recipeRequirements(recipe, Math.min(1, project.target - project.crafted)).get(material.id)?.count || 0
       : 0;
     const expectedRemaining = isProjectCompleted(project) ? 0 : Math.max(remainingNet, firstCraftInputs);
     const missing = Math.max(0, expectedRemaining - available);
@@ -357,7 +358,6 @@ export function projectMaterials(state: AppState, project: Project, catalog: Cat
 /** Aggregate active-project shortages after priority-based shared stock allocation. */
 export function materialShortageOverview(state: AppState, catalog: CatalogItem[]): MaterialShortageSummary[] {
   const activeProjects = state.projects.filter((project) => !isProjectCompleted(project));
-  const activeProjectIds = new Set(activeProjects.map((project) => project.id));
   const projectRows = activeProjects.flatMap((project) => projectMaterials(state, project, catalog)
     .filter((row) => row.required > 0)
     .map((row) => ({ project, row })));
@@ -391,16 +391,14 @@ export function materialShortageOverview(state: AppState, catalog: CatalogItem[]
       && (getOrderStatus(order) === 'Active' || getOrderStatus(order) === 'Partially Fulfilled'));
     const onOrder = outstandingOrders.reduce((sum, order) => sum + order.remaining, 0);
     const notCovered = Math.max(0, stillNeeded - onOrder);
-    const confirmedOrderAcquisitions = orders.filter((order) => activeProjectIds.has(order.projectId))
-      .reduce((sum, order) => sum + order.acquired, 0);
-    // Receipts enter shared inventory. Cap them by currently available stock and demand
-    // so an order receipt is not counted twice or treated as available after consumption.
-    const acquiredTowardRequirement = Math.min(required, available, confirmedOrderAcquisitions);
+    // Available plus consumed reconstructs the quantity actually acquired, including
+    // manually owned stock and confirmed purchases. Outstanding orders are excluded.
+    const acquiredTowardRequirement = Math.min(required, entries.reduce((sum, { row }) => sum + row.available + row.consumed, 0));
     return {
       id: materialId, name: first.name, count: first.count, returnable: first.returnable,
       required, available, stillNeeded, onOrder, notCovered, acquiredTowardRequirement,
       orderCoveragePct: stillNeeded > 0 ? Math.min(onOrder, stillNeeded) / stillNeeded * 100 : null,
-      acquisitionProgressPct: stillNeeded > 0 ? Math.min(acquiredTowardRequirement, stillNeeded) / stillNeeded * 100 : null,
+      acquisitionProgressPct: required > 0 ? acquiredTowardRequirement / required * 100 : null,
       projects: entries.map(({ project, row }) => ({ project, required: row.required, available: row.available, stillNeeded: row.missing })),
       orders,
     };
@@ -421,7 +419,7 @@ export function setProjectMaterialBalance(state: AppState, project: Project, mat
 export function batchRequirements(recipe: Recipe, craftedBefore: number, batch: number, returnRate = 0) {
   const after = recipeRequirements(recipe, craftedBefore + batch, returnRate);
   const before = recipeRequirements(recipe, craftedBefore, returnRate);
-  const firstCraft = recipeRequirements(recipe, Math.min(Math.max(1, recipe.outputCount), batch));
+  const firstCraft = recipeRequirements(recipe, Math.min(1, batch));
   return new Map([...after.entries()].map(([id, material]) => [id, {
     ...material, count: Math.max(material.count - (before.get(id)?.count || 0), firstCraft.get(id)?.count || 0),
   }]));
@@ -494,14 +492,23 @@ export function nextBatchTarget(project: Project) {
 }
 
 export const JOURNAL_FAME_BY_TIER: Record<number, number> = { 2: 900, 3: 1800, 4: 3600, 5: 7200, 6: 14400, 7: 28380, 8: 58590 };
+const BASE_CRAFTING_FAME_PER_MATERIAL: Record<number, number> = { 2: 2.5, 3: 7.5, 4: 22.5, 5: 90, 6: 270, 7: 645, 8: 1395 };
 
 export function journalPlan(project: Project, item: CatalogItem | undefined, quantity: number) {
-  const fame = project.journalFamePerItem;
+  const recipe = item?.recipes.find((entry) => entry.id === project.recipeId) || item?.recipes[0];
+  const baseFame = item ? BASE_CRAFTING_FAME_PER_MATERIAL[item.tier] : undefined;
+  const enchantment = itemEnchantmentLevel(project.recipeId);
+  const nonArtifactMaterials = recipe?.materials.reduce((sum, material) => (
+    /_ARTEFACT(?:_|$)|_ARTIFACT(?:_|$)|_SHARD_FIRE_DRAGON$/.test(material.id) ? sum : sum + material.count
+  ), 0) || 0;
+  const fame = baseFame && nonArtifactMaterials > 0
+    ? baseFame * nonArtifactMaterials * (2 ** Number(enchantment || 0)) * (item?.craftingFameFactor || 1)
+    : null;
   const threshold = item ? JOURNAL_FAME_BY_TIER[item.tier] : undefined;
   if (!fame || fame <= 0 || !threshold || quantity <= 0) return null;
   const totalFame = quantity * fame;
   const journals = Math.ceil(totalFame / threshold);
-  return { journals, fullyFillable: Math.floor(totalFame / threshold), partialFame: totalFame % threshold, estimate: true as const };
+  return { famePerItem: fame, journals, fullyFillable: Math.floor(totalFame / threshold), partialFame: totalFame % threshold, estimate: true as const };
 }
 
 export function sharedUnallocated(state: AppState, materialId: string, catalog?: CatalogItem[]) {

@@ -6,6 +6,7 @@ import {
   ShieldCheck, ShoppingCart, Sparkles, Target, Trash2, TrendingUp, Upload, Wallet, X,
 } from 'lucide-react';
 import catalogData from './catalog.json';
+import craftingFameFactors from './craftingFameFactors.json';
 import {
   batchRequirements, CITY_OPTIONS, emptyState, formatItemName, formatMaterialName, formatNumber, formatSilver, formatTier, getOrderStatus, getPriceFreshness, itemEnchantmentLevel,
   manualPriceKey, materialShortageOverview, mergePriceSnapshot, newId, priceKey, projectMaterials,
@@ -34,6 +35,7 @@ for (const entry of sourceCatalog) for (const recipe of entry.recipes) for (cons
 const displayMaterialName = (id: string, name: string) => formatMaterialName(id, name, sourceMaterialNames);
 const catalog = sourceCatalog.map((entry) => ({
   ...entry,
+  craftingFameFactor: entry.craftingFameFactor ?? (craftingFameFactors as Record<string, number>)[entry.id] ?? 1,
   recipes: entry.recipes.map((recipe) => ({ ...recipe, materials: recipe.materials.map((material) => ({ ...material, name: displayMaterialName(material.id, material.name) })) })),
 }));
 const CATALOG_BY_ID = new Map(catalog.map((item) => [item.id, item]));
@@ -111,7 +113,7 @@ function ItemPicker({ value, onChange, disabled = false }: { value: string; onCh
     <label className="field-label">Craftable item <span className="required-star">*</span></label>
     <div className="picker-input"><Search size={16} /><input value={query} disabled={disabled} placeholder={`Search ${catalog.length.toLocaleString()} craftable items…`} onChange={(event) => { setQuery(event.target.value); setOpen(true); if (value) onChange(undefined); }} onFocus={() => setOpen(true)} onBlur={() => setTimeout(() => setOpen(false), 130)} /><ChevronDown size={15} /></div>
     {open && <div className="picker-results">{results.length ? results.map((item) => <button type="button" className="picker-option" key={item.id} onMouseDown={(event) => event.preventDefault()} onClick={() => { setQuery(formatItemName(item.name, item.id)); setOpen(false); onChange(item); }}>
-      <ItemIcon id={item.id} size={38} /><span className="picker-option-title"><strong>{formatItemName(item.name, item.id)}</strong><small>{item.category} · {formatTier(item.tier, item.id)} · {item.recipes.length} {item.recipes.length === 1 ? 'recipe' : 'recipes'}</small></span><span className="item-id">{item.id}</span>
+      <ItemIcon id={item.id} size={38} /><span className="picker-option-title"><strong>{formatItemName(item.name, item.id)}</strong><small>{item.category} · {formatTier(item.tier, item.id)}</small></span><span className="item-id">{item.id}</span>
     </button>) : <div className="picker-empty">No craftable items found in the current catalog.</div>}</div>}
     {selected && <div className="selected-item"><ItemIcon id={selected.id} /><span><strong>{formatItemName(selected.name, selected.id)}</strong><small>{selected.category} · {formatTier(selected.tier, selected.id)}</small></span></div>}
   </div>;
@@ -120,6 +122,7 @@ function ItemPicker({ value, onChange, disabled = false }: { value: string; onCh
 function ProjectModal({ state, project, onClose, onSave }: { state: AppState; project?: Project; onClose: () => void; onSave: (project: Project) => void }) {
   const [item, setItem] = useState<CatalogItem | undefined>(project ? CATALOG_BY_ID.get(project.itemId) : undefined);
   const [recipeId, setRecipeId] = useState(project?.recipeId || '');
+  const [enchantment, setEnchantment] = useState(itemEnchantmentLevel(project?.recipeId || '') || '0');
   const [name, setName] = useState(project?.name || '');
   const [target, setTarget] = useState(String(project?.target ?? 100));
   const [sellingPrice, setSellingPrice] = useState(project?.sellingPrice == null ? '' : String(project.sellingPrice));
@@ -128,7 +131,14 @@ function ProjectModal({ state, project, onClose, onSave }: { state: AppState; pr
   const [deadline, setDeadline] = useState(project?.deadline || '');
   const [notes, setNotes] = useState(project?.notes || '');
   const existingRecords = project ? project.crafted > 0 || state.purchases.some((entry) => entry.projectId === project.id) || state.allocations.some((entry) => entry.projectId === project.id) || state.orders.some((entry) => entry.projectId === project.id) || state.sessions.some((entry) => entry.projectId === project.id) : false;
-  const chosenRecipe = item?.recipes.find((recipe) => recipe.id === recipeId) || item?.recipes[0];
+  const dragonSlayer = !!item && /dragonslayer/i.test(item.name);
+  const enchantmentLevels = [...new Set(item?.recipes.map((recipe) => itemEnchantmentLevel(recipe.id) || '0') || [])]
+    .sort((a, b) => Number(a) - Number(b));
+  const recipesAtEnchantment = item?.recipes.filter((recipe) => (itemEnchantmentLevel(recipe.id) || '0') === enchantment) || [];
+  const currentRecipe = recipesAtEnchantment.find((recipe) => recipe.id === recipeId)
+    || recipesAtEnchantment.find((recipe) => !/fire dragon scales/i.test(recipe.label))
+    || recipesAtEnchantment[0];
+  const chosenRecipe = currentRecipe ? { ...currentRecipe, outputCount: 1 } : undefined;
   const previewRequirements = chosenRecipe ? recipeRequirements(chosenRecipe, Math.max(0, Number(target) || 0), Math.min(100, Math.max(0, Number(returnRate) || 0)) / 100) : new Map<string, Material>();
   const save = (event: React.FormEvent) => {
     event.preventDefault();
@@ -149,9 +159,10 @@ function ProjectModal({ state, project, onClose, onSave }: { state: AppState; pr
   };
   return <ModalShell title={project ? 'Edit crafting project' : 'Plan a crafting project'} subtitle="Start with an item from the game recipe catalog." onClose={onClose} wide>
     <form onSubmit={save} className="form-body">
-    <div className="form-grid"><ItemPicker value={item?.id || ''} disabled={existingRecords} onChange={(selected) => { if (existingRecords) return; const oldAutoName = item ? formatItemName(item.name, recipeId || item.id) : ''; setItem(selected); setRecipeId(selected?.recipes[0]?.id || ''); if (selected) setName((current) => !current || current === oldAutoName ? formatItemName(selected.name, selected.recipes[0]?.id || selected.id) : current); }} />
+    <div className="form-grid"><ItemPicker value={item?.id || ''} disabled={existingRecords} onChange={(selected) => { if (existingRecords) return; const oldAutoName = item ? formatItemName(item.name, recipeId || item.id) : ''; const nextLevel = selected ? itemEnchantmentLevel(selected.recipes[0]?.id || '') || '0' : '0'; const nextRecipes = selected?.recipes.filter((recipe) => (itemEnchantmentLevel(recipe.id) || '0') === nextLevel) || []; const nextRecipe = nextRecipes.find((recipe) => !/fire dragon scales/i.test(recipe.label)) || nextRecipes[0]; setItem(selected); setEnchantment(nextLevel); setRecipeId(nextRecipe?.id || ''); if (selected) setName((current) => !current || current === oldAutoName ? formatItemName(selected.name, nextRecipe?.id || selected.id) : current); }} />
         <div className="field"><label className="field-label">Project name</label><input value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Season 27 gear stock" maxLength={80} /></div>
-        <div className="field"><label className="field-label">Recipe option</label><select value={recipeId || chosenRecipe?.id || ''} onChange={(event) => setRecipeId(event.target.value)} disabled={!item}>{item?.recipes.map((recipe) => <option key={recipe.id} value={recipe.id}>{recipeName(recipe, item.name)} · yields {recipe.outputCount}</option>)}</select><small className="field-help">Changing the recipe updates future requirements. Past sessions and acquisitions remain in history.</small></div>
+        <div className="field"><label className="field-label">Enchantment</label><select value={enchantment} disabled={!item} onChange={(event) => { const nextLevel = event.target.value; const previousName = item && currentRecipe ? formatItemName(item.name, currentRecipe.id) : ''; const nextOptions = item?.recipes.filter((recipe) => (itemEnchantmentLevel(recipe.id) || '0') === nextLevel) || []; const keepScaleVariant = !!currentRecipe && /fire dragon scales/i.test(currentRecipe.label); const sameVariant = nextOptions.find((recipe) => dragonSlayer && /fire dragon scales/i.test(recipe.label) === keepScaleVariant); const nextRecipe = sameVariant || nextOptions.find((recipe) => !/fire dragon scales/i.test(recipe.label)) || nextOptions[0]; setEnchantment(nextLevel); setRecipeId(nextRecipe?.id || ''); if (item && nextRecipe) setName((current) => current === previousName ? formatItemName(item.name, nextRecipe.id) : current); }}>{enchantmentLevels.map((level) => <option key={level} value={level}>{level === '0' ? 'No enchantment (.0)' : `.${level}`}</option>)}</select><small className="field-help">Choose the item enchantment level.</small></div>
+        {dragonSlayer && <div className="field"><label className="field-label">Recipe option</label><select value={chosenRecipe?.id || ''} onChange={(event) => setRecipeId(event.target.value)} disabled={!item}>{recipesAtEnchantment.map((recipe) => <option key={recipe.id} value={recipe.id}>{/fire dragon scales/i.test(recipe.label) ? 'Fire Dragon Scales' : 'Standard materials'} · yields 1</option>)}</select><small className="field-help">Choose which Dragon Slayer material recipe to use.</small></div>}
         <div className="field"><label className="field-label">Target quantity</label><input type="number" min="1" step="1" required value={target} onChange={(event) => setTarget(event.target.value)} /><small className="field-help">Recipe resource totals update with this target.</small></div>
         <div className="field"><label className="field-label">Selling price per item <span className="optional-label">Optional</span></label><PriceInput value={sellingPrice} onChange={setSellingPrice} placeholder="Enter expected price" /></div>
         <div className="field"><label className="field-label">Project RRR estimate</label><div className="input-suffix"><input type="number" min="0" max="100" step="0.1" value={returnRate} onChange={(event) => setReturnRate(event.target.value)} /><span>%</span></div><small className="field-help">This project rate is independent of the application default.</small></div>
@@ -159,7 +170,7 @@ function ProjectModal({ state, project, onClose, onSave }: { state: AppState; pr
         <div className="field"><label className="field-label">Deadline <span className="optional-label">Optional</span></label><input type="date" value={deadline} onChange={(event) => setDeadline(event.target.value)} /></div>
         <div className="field full-field"><label className="field-label">Notes <span className="optional-label">Optional</span></label><textarea rows={3} value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Add a goal, location, or other context…" /></div>
       </div>
-      {chosenRecipe && <div className="recipe-preview"><strong>Selected: {recipeName(chosenRecipe, item?.name)} · ingredients per recipe run (yields {chosenRecipe.outputCount}) and for this target; RRR applies to returnable inputs</strong><div>{chosenRecipe.materials.map((material) => <span key={material.id}><ItemIcon id={material.id} size={25} />{material.name}: {formatNumber(material.count)} per run · {formatNumber(previewRequirements.get(material.id)?.count || 0)} total{!material.returnable ? ' · no returns' : ''}</span>)}</div></div>}
+      {chosenRecipe && <div className="recipe-preview"><strong>Selected: {recipeName(chosenRecipe, item?.name)} · one item per craft; ingredients for this target; RRR applies to returnable inputs</strong><div>{chosenRecipe.materials.map((material) => <span key={material.id}><ItemIcon id={material.id} size={25} />{material.name}: {formatNumber(material.count)} per item · {formatNumber(previewRequirements.get(material.id)?.count || 0)} total{!material.returnable ? ' · no returns' : ''}</span>)}</div></div>}
       {project && <p className="helper-note"><CircleHelp size={15} /> Material purchases and recipe history are preserved when you change the target. {existingRecords && 'The item stays fixed after progress or transactions exist; recipe changes affect future planning only.'}</p>}
       <div className="modal-actions"><button type="button" className="button button-quiet" onClick={onClose}>Cancel</button><button className="button button-primary" disabled={!item}>{project ? 'Save changes' : 'Create project'}<ArrowUpRight size={15} /></button></div>
     </form>
@@ -460,9 +471,9 @@ function JournalPlanner({ project, item, sessions, onUpdate }: { project: Projec
   const owned = project.journalsOwned || 0;
   const filled = project.journalsFilled ?? sessions.reduce((sum, entry) => sum + (entry.journalsFilled || 0), 0);
   const partial = project.journalsInProgress ?? sessions.reduce((sum, entry) => sum + (entry.journalsPartial || 0), 0);
-  return <section className="panel section-panel journal-planner"><div className="section-heading"><div><span className="eyebrow">CRAFTING JOURNALS</span><h3>Journal filling plan</h3><p>Estimates use the fame per item you enter. Journal thresholds are tier-based; actual fill depends on eligible crafting fame.</p></div><ClipboardList size={20} /></div>
+  return <section className="panel section-panel journal-planner"><div className="section-heading"><div><span className="eyebrow">CRAFTING JOURNALS</span><h3>Journal filling plan</h3><p>Fame per craft is estimated automatically from the selected catalog recipe.</p></div><ClipboardList size={20} /></div>
     <div className="journal-grid"><div className="field"><label className="field-label">Journal type</label><select value={project.journalType || item?.journalType || ''} onChange={(event) => onUpdate({ journalType: event.target.value })}><option value="">Select / verify journal type</option>{['Fletcher', 'Blacksmith', 'Imbuer', 'Tinker', 'Other'].map((type) => <option key={type}>{type}</option>)}</select></div>
-      <div className="field"><label className="field-label">Base journal fame per item</label><input type="number" min="0" step="1" value={project.journalFamePerItem ?? ''} onChange={(event) => onUpdate({ journalFamePerItem: event.target.value === '' ? null : Math.max(0, Number(event.target.value)) })} placeholder="Enter from verified recipe data" /></div>
+      <div className="journal-estimate"><span>Estimated base fame per item</span><strong>{full ? formatNumber(full.famePerItem) : 'Unavailable'}</strong></div>
       <div className="journal-estimate"><span>Journal tier</span><strong>{item?.tier ? `T${item.tier}${item.recipes.find((recipe) => recipe.id === project.recipeId)?.id.match(/@(\d+)/)?.[1] ? ` · enchantment ${item.recipes.find((recipe) => recipe.id === project.recipeId)?.id.match(/@(\d+)/)?.[1]}` : ''}` : 'Unknown'}</strong></div>
       <div className="journal-estimate"><span>Estimated journals · full project</span><strong>{full ? formatNumber(full.journals) : 'Fame data needed'}</strong></div>
       <div className="journal-estimate"><span>Expected fully filled</span><strong>{full ? formatNumber(full.fullyFillable) : 'Fame data needed'}</strong></div>
@@ -472,7 +483,7 @@ function JournalPlanner({ project, item, sessions, onUpdate }: { project: Projec
       <div className="field"><label className="field-label">In progress / partial</label><input type="number" min="0" step="1" value={partial} onChange={(event) => onUpdate({ journalsInProgress: Math.max(0, Math.floor(Number(event.target.value) || 0)) })} /></div>
       <div className="field"><label className="field-label">Journals bought · cumulative</label><input type="number" min="0" step="1" value={project.journalsBought || 0} onChange={(event) => { const count = Math.max(0, Math.floor(Number(event.target.value) || 0)); const delta = count - (project.journalsBought || 0); onUpdate({ journalsBought: count, journalsOwned: Math.max(0, owned + delta) }); }} /></div>
       <div className="field"><label className="field-label">Journals sold · cumulative</label><input type="number" min="0" step="1" value={project.journalsSold || 0} onChange={(event) => { const count = Math.max(0, Math.floor(Number(event.target.value) || 0)); const delta = count - (project.journalsSold || 0); onUpdate({ journalsSold: count, journalsOwned: Math.max(0, owned - delta) }); }} /></div>
-    </div><small className="field-help">ESTIMATE: Albion only counts eligible base crafting fame for journals. The planner does not invent missing fame values or consume journals automatically. Journal tracking is separate from the project’s material readiness and completion status.</small>
+    </div><small className="field-help">ESTIMATE: fame uses the selected recipe, item tier, enchantment, non-artifact material count, and the fame multiplier from game data. Journal tracking does not affect material readiness or project completion.</small>
   </section>;
 }
 

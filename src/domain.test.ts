@@ -52,9 +52,9 @@ describe('recipe requirement calculations', () => {
     expect(required.get('T4_ARTIFACT')?.count).toBe(8);
   });
 
-  it('uses recipe yield when calculating stackable crafting batches', () => {
-    expect(recipeRequirements(batchItem.recipes[0], 10).get('T4_HERB')?.count).toBe(16);
-    expect(recipeRequirements(batchItem.recipes[0], 11).get('T4_HERB')?.count).toBe(24);
+  it('plans one craft output per project item even when catalog output count differs', () => {
+    expect(recipeRequirements(batchItem.recipes[0], 10).get('T4_HERB')?.count).toBe(80);
+    expect(recipeRequirements(batchItem.recipes[0], 11).get('T4_HERB')?.count).toBe(88);
   });
 
   it('applies a configured return rate only to returnable ingredients', () => {
@@ -320,7 +320,7 @@ describe('material shortage and order progress overview', () => {
     state.orders = [makeOrder({ id: 'martlock', city: 'Martlock', unitPrice: 11, quantity: 70 }), makeOrder({ id: 'thetford', city: 'Thetford', unitPrice: 14, quantity: 50 })];
     const received = recordOrderReceipt(state, 'martlock', 20, 11, '2026-01-02', '', 'receipt-1')!;
     const row = overviewRow(received);
-    expect(row).toMatchObject({ stillNeeded: 80, available: 20, onOrder: 100, notCovered: 0, acquiredTowardRequirement: 20, orderCoveragePct: 100, acquisitionProgressPct: 25 });
+    expect(row).toMatchObject({ stillNeeded: 80, available: 20, onOrder: 100, notCovered: 0, acquiredTowardRequirement: 20, orderCoveragePct: 100, acquisitionProgressPct: 20 });
     expect(row.orders).toEqual(expect.arrayContaining([
       expect.objectContaining({ city: 'Martlock', unitPrice: 11, quantity: 70, acquired: 20, remaining: 50 }),
       expect.objectContaining({ city: 'Thetford', unitPrice: 14, quantity: 50, acquired: 0, remaining: 50 }),
@@ -339,6 +339,25 @@ describe('material shortage and order progress overview', () => {
     expect(row.projects.reduce((sum, entry) => sum + entry.available, 0)).toBe(50);
   });
 
+  it('keeps acquisition and order coverage separate across two Dragonslayer projects', () => {
+    const materialId = 'T6_SHARD_FIRE_DRAGON';
+    const dragonslayer: CatalogItem = {
+      ...recipeItem, id: 'T6_ARMOR_LEATHER_DRAGON', name: 'Master\'s Dragonslayer Jacket', tier: 6,
+      recipes: ['@3', '@2'].map((level) => ({ id: `T6_ARMOR_LEATHER_DRAGON${level}:fire-scales`, label: 'Alternative: Fire Dragon Scales', outputCount: 1, materials: [{ id: materialId, name: 'T6 Fire Dragon Scale', count: 50, returnable: false }] })),
+    };
+    const firstProject = { ...project, id: 'dragon-3', name: 'Master\'s Dragonslayer Jacket .3', itemId: dragonslayer.id, recipeId: dragonslayer.recipes[0].id, target: 20, priority: 'Urgent' as const };
+    const secondProject = { ...firstProject, id: 'dragon-2', name: 'Master\'s Dragonslayer Jacket .2', recipeId: dragonslayer.recipes[1].id, priority: 'Normal' as const };
+    const state = emptyState();
+    state.projects = [firstProject, secondProject];
+    state.inventoryBalances = [
+      { id: 'first-stock', projectId: firstProject.id, materialId, materialName: 'T6 Fire Dragon Scale', quantity: 1000, updatedAt: '2026-01-01' },
+      { id: 'shared-stock', projectId: null, materialId, materialName: 'T6 Fire Dragon Scale', quantity: 251, updatedAt: '2026-01-01' },
+    ];
+    state.orders = [makeOrder({ id: 'scale-order', projectId: secondProject.id, materialId, materialName: 'T6 Fire Dragon Scale', quantity: 749 })];
+    const row = materialShortageOverview(state, [dragonslayer]).find((entry) => entry.id === materialId)!;
+    expect(row).toMatchObject({ required: 2000, available: 1251, stillNeeded: 749, onOrder: 749, notCovered: 0, acquiredTowardRequirement: 1251, orderCoveragePct: 100, acquisitionProgressPct: 62.55 });
+  });
+
   it('excludes cancelled and fully fulfilled orders from outstanding coverage', () => {
     const cancelled = emptyState();
     cancelled.projects = [{ ...project }];
@@ -349,18 +368,18 @@ describe('material shortage and order progress overview', () => {
     fulfilled.projects = [{ ...project }];
     fulfilled.orders = [makeOrder({ fulfilled: 100, received: 100 })];
     fulfilled.purchases = [{ id: 'fulfilled-receipt', projectId: null, materialId: 'T4_METALBAR', materialName: 'Metal Bar', city: 'Bridgewatch', quantity: 100, unitPrice: 10, date: '2026-01-02', notes: '', orderId: 'shortage-order' }];
-    expect(overviewRow(fulfilled)).toMatchObject({ stillNeeded: 0, onOrder: 0, notCovered: 0, acquiredTowardRequirement: 100, orderCoveragePct: null, acquisitionProgressPct: null });
+    expect(overviewRow(fulfilled)).toMatchObject({ stillNeeded: 0, onOrder: 0, notCovered: 0, acquiredTowardRequirement: 100, orderCoveragePct: null, acquisitionProgressPct: 100 });
     expect(overviewRow(fulfilled).orders[0].remaining).toBe(0);
   });
 
-  it('updates acquisition progress from confirmed inventory once and reflects inventory edits', () => {
+  it('updates acquisition progress from confirmed and manually owned inventory against total requirements', () => {
     const state = emptyState();
     state.projects = [{ ...project }];
     state.orders = [makeOrder({ quantity: 80 })];
     const received = recordOrderReceipt(state, 'shortage-order', 20, 10, '2026-01-02', '', 'unique-receipt')!;
-    expect(overviewRow(received)).toMatchObject({ available: 20, stillNeeded: 80, acquiredTowardRequirement: 20, acquisitionProgressPct: 25 });
+    expect(overviewRow(received)).toMatchObject({ available: 20, stillNeeded: 80, acquiredTowardRequirement: 20, acquisitionProgressPct: 20 });
     expect(recordOrderReceipt(received, 'shortage-order', 20, 10, '2026-01-02', '', 'unique-receipt')).toBeNull();
-    expect(overviewRow({ ...received, inventoryBalances: [{ id: 'shared-extra', projectId: null, materialId: 'T4_METALBAR', materialName: 'Metal Bar', quantity: 30, updatedAt: '2026-01-03' }] })).toMatchObject({ available: 50, stillNeeded: 50 });
+    expect(overviewRow({ ...received, inventoryBalances: [{ id: 'shared-extra', projectId: null, materialId: 'T4_METALBAR', materialName: 'Metal Bar', quantity: 30, updatedAt: '2026-01-03' }] })).toMatchObject({ available: 50, stillNeeded: 50, acquiredTowardRequirement: 50, acquisitionProgressPct: 50 });
   });
 
   it('recalculates changed project targets and excludes materials removed by recipe changes', () => {
@@ -380,10 +399,10 @@ describe('material shortage and order progress overview', () => {
 });
 
 describe('market sources, order accounting, and persistence validation', () => {
-  it('plans journals only when fame input and tier threshold data are both available', () => {
-    expect(journalPlan({ ...project, journalFamePerItem: 360 }, { ...recipeItem, tier: 4 }, 10)?.journals).toBe(1);
-    expect(journalPlan(project, { ...recipeItem, tier: 4 }, 10)).toBeNull();
-    expect(journalPlan({ ...project, journalFamePerItem: 360 }, { ...recipeItem, tier: 1 }, 10)).toBeNull();
+  it('calculates journal plans automatically from recipe material fame and tier thresholds', () => {
+    expect(journalPlan(project, { ...recipeItem, tier: 4 }, 10)).toMatchObject({ famePerItem: 225, journals: 1 });
+    expect(journalPlan({ ...project, recipeId: 'T4_TEST_SWORD@2' }, { ...recipeItem, tier: 4, recipes: [{ ...recipeItem.recipes[0], id: 'T4_TEST_SWORD@2' }] }, 10)?.famePerItem).toBe(900);
+    expect(journalPlan(project, { ...recipeItem, tier: 1 }, 10)).toBeNull();
   });
 
   it('adds the Fire Dragon Scale alternative only to Dragonslayer leather armor slots', () => {

@@ -90,5 +90,9 @@ for (const [sourceType, group] of itemGroups) {
 }
 catalog.sort((a, b) => a.category.localeCompare(b.category) || a.tier - b.tier || a.name.localeCompare(b.name));
 await writeFile('src/catalog.json', JSON.stringify(catalog));
+const craftingFameFactors = Object.fromEntries(catalog
+  .filter((item) => item.craftingFameFactor && item.craftingFameFactor !== 1)
+  .map((item) => [item.id, item.craftingFameFactor]));
+await writeFile('src/craftingFameFactors.json', JSON.stringify(craftingFameFactors, null, 2));
 console.log(`Wrote ${catalog.length.toLocaleString()} craftable items (${catalog.reduce((n, item) => n + item.recipes.length, 0).toLocaleString()} recipes) to src/catalog.json`);
 if (process.argv.includes('--fetch')) await Promise.all([source, formatted].map((file) => unlink(file).catch(() => {})));

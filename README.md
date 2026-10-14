@@ -1,6 +1,6 @@
-# Albion Crafting Planner
+# Albion Forge Ledger
 
-A local browser app for Albion Online crafting projects, material acquisition, city buy orders, crafting sessions, and task tracking.
+A browser app for Albion Online crafting projects, material acquisition, city buy orders, crafting sessions, and task tracking.
 
 ## Run it
 
@@ -21,6 +21,12 @@ npm.cmd run preview
 ```
 
 Run the core calculation and accounting checks with `npm.cmd test`.
+
+## Free GitHub Pages hosting
+
+The repository includes a GitHub Actions workflow that runs the tests, builds the app, and deploys it when changes are pushed to `main`. In the repository, open **Settings → Pages** and choose **GitHub Actions** as the build and deployment source. The public site URL will be <https://ixa-m.github.io/Forge-Ledger/>.
+
+Project data remains in local storage in each visitor's browser. Hosting does not add account login or sync data between devices.
 
 ## Recipe data
 
