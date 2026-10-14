@@ -1,6 +1,6 @@
 # Albion Forge Ledger
 
-A browser app for Albion Online crafting projects, material acquisition, city buy orders, crafting sessions, and task tracking.
+This is a browser app for Albion Online crafting projects, material acquisition, city buy orders, crafting sessions, and task tracking, its intended for personal use but you can also use it.
 
 ## Run it
 
@@ -21,12 +21,6 @@ npm.cmd run preview
 ```
 
 Run the core calculation and accounting checks with `npm.cmd test`.
-
-## Free GitHub Pages hosting
-
-The repository includes a GitHub Actions workflow that runs the tests, builds the app, and deploys it when changes are pushed to `main`. In the repository, open **Settings → Pages** and choose **GitHub Actions** as the build and deployment source. The public site URL will be <https://ixa-m.github.io/Forge-Ledger/>.
-
-Project data remains in local storage in each visitor's browser. Hosting does not add account login or sync data between devices.
 
 ## Recipe data
 
@@ -49,3 +43,25 @@ Optional extra purchase costs affect only future cost estimates and planned orde
 ## Data handling
 
 All project records live in local storage for the current browser profile. They do not sync between browsers or devices. Browser storage can be cleared outside the app, so export backups regularly. Icons load from Albion's public item render service; planning and saved data continue to work without icons or market access.
+
+## Project structure
+
+```text
+src/
+  App.tsx                       App state, navigation, and page composition
+  components/                   Shared controls and reusable row/table UI
+  data/catalog.ts               Catalog display names and fame-factor enrichment
+  features/dialogs/              Project, purchase, order, and inventory dialogs
+  features/settings/             Market, crafting, and backup settings
+  utils/formatting.ts             Shared display formatting
+  domain.ts                      Shared types and crafting/inventory calculations
+  market.ts                      Albion market snapshot requests
+  storage.ts                     Local storage and exports
+  styles.css                     Existing application styles
+  App.test.tsx                   App mount and project-dialog smoke test
+  domain.test.ts                 Domain and accounting tests
+```
+
+The app entry point is `src/main.tsx`. Screen navigation and app-wide state are coordinated in `src/App.tsx`; feature dialogs and reusable display components are kept in their own modules. Core calculations and shared data types belong in `src/domain.ts`, while browser persistence stays in `src/storage.ts`.
+
+There is no separate lint command configured. `npm.cmd run build` runs the TypeScript project check before creating the production bundle. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the state flow and a quick guide to common changes.

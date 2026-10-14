@@ -223,7 +223,7 @@ export function expectedReturns(recipe: Recipe, quantity: number, returnRate: nu
     material.returnable ? Math.round(material.count * rate) : 0]));
 }
 
-function priorityValue(priority: Priority) {
+export function priorityValue(priority: Priority) {
   return priority === 'Urgent' ? 4 : priority === 'High' ? 3 : priority === 'Normal' ? 2 : 1;
 }
 
