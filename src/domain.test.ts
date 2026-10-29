@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import catalogData from './catalog.json';
+import { priceAge } from './utils/formatting';
 import {
-  batchRequirements, emptyState, expectedReturns, formatItemName, formatMaterialName, formatNumber, formatSilver, formatTier, getOrderStatus, getPriceFreshness, isProjectCompleted, journalPlan, manualPriceKey, markProjectCrafted, materialReadiness, materialShortageOverview, mergePriceSnapshot, priceKey, projectMaterialCost, projectMaterials,
-  recipeRequirements, recordOrderReceipt, reverseOrderPurchase, setProjectMaterialBalance, sharedUnallocated, validateState, type AppState, type BuyOrder, type CatalogItem, type Project, type Recipe,
+  allTimeMoneyGained, batchRequirements, emptyState, expectedReturns, formatItemName, formatMaterialName, formatNumber, formatSilver, formatTier, getOrderStatus, getPriceFreshness, isProjectCompleted, journalPlan, manualPriceKey, markProjectCrafted, materialReadiness, materialShortageOverview, mergePriceSnapshot, priceKey, projectMaterialCost, projectMaterials,
+  projectReturnRate, recipeFor, recipeRequirements, recordOrderReceipt, repeatBuyOrder, reverseOrderPurchase, setProjectMaterialBalance, sharedUnallocated, validateState, type AppState, type BuyOrder, type CatalogItem, type Project, type Recipe,
   resourceReturnRateFromProductionBonus,
 } from './domain';
 
@@ -46,6 +47,13 @@ describe('readable item and price formatting', () => {
 });
 
 describe('recipe requirement calculations', () => {
+  it('forces 15.2% RRR for Enchant Craft projects while preserving ordinary project rates', () => {
+    const state = emptyState();
+    const enchantProject: Project = { ...project, returnRate: 35.7, enchantCraft: { targetEnchantment: 2, runeTier: 4, unitsPerLevel: 192 } };
+    expect(projectReturnRate(state, enchantProject)).toBe(0.152);
+    expect(projectReturnRate(state, { ...project, returnRate: 35.7 })).toBeCloseTo(0.357);
+  });
+
   it('multiplies actual recipe inputs for multiple items and preserves non-returnable artifacts', () => {
     const required = recipeRequirements(recipeItem.recipes[0], 4);
     expect(required.get('T4_METALBAR')?.count).toBe(40);
@@ -90,6 +98,14 @@ describe('recipe requirement calculations', () => {
 });
 
 describe('project stock and progress', () => {
+  it('totals only recorded actual sale proceeds across projects', () => {
+    expect(allTimeMoneyGained([
+      { ...project, sales: [{ id: 'sale-1', date: '2026-02-01', quantity: 2, amount: 1200, notes: '' }, { id: 'sale-2', date: '2026-02-02', quantity: 1, amount: 700, notes: '' }] },
+      { ...project, id: 'p2', sales: [{ id: 'sale-3', date: '2026-02-03', quantity: 3, amount: 1800, notes: '' }] },
+      { ...project, id: 'p3' },
+    ])).toBe(3700);
+  });
+
   it('calculates material readiness evenly by required quantity and caps excess stock', () => {
     const state = emptyState();
     state.projects = [{ ...project }];
@@ -193,6 +209,28 @@ describe('project stock and progress', () => {
     expect(updatedRate.estimatedReturns).toBe(30);
     expect(updatedRate.expectedRequired).toBe(70);
     expect(updatedRate.required).toBe(70);
+  });
+
+  it('integrates Enchant Craft materials into the standard Forge project and buy-order model', () => {
+    const enchanted: Project = {
+      ...project, name: 'Enchant Craft · Test Sword .2',
+      enchantCraft: { targetEnchantment: 2, runeTier: 4, unitsPerLevel: 288 },
+      additionalMaterials: [
+        { id: 'T4_RUNE', name: 'T4 Rune', count: 288, returnable: false },
+        { id: 'T4_SOUL', name: 'T4 Soul', count: 288, returnable: false },
+      ],
+    };
+    const state = emptyState();
+    state.projects = [enchanted];
+    state.orders = [makeOrder({ id: 'rune-order', materialId: 'T4_RUNE', materialName: 'T4 Rune', quantity: 500 })];
+
+    const recipe = recipeFor(enchanted, catalog).recipe!;
+    const materials = projectMaterials(state, enchanted, catalog);
+    expect(recipe.materials.map((entry) => entry.id)).toContain('T4_RUNE');
+    expect(materials.find((entry) => entry.id === 'T4_RUNE')).toMatchObject({ required: 2880, missing: 2880, orderRemaining: 500 });
+    expect(materialReadiness(state, enchanted, catalog)).toBeLessThan(100);
+    expect(materialShortageOverview(state, catalog).find((entry) => entry.id === 'T4_RUNE')).toMatchObject({ required: 2880, onOrder: 500, notCovered: 2380, acquisitionProgressPct: 0 });
+    expect(validateState({ ...state, projects: [enchanted] })).toBe(true);
   });
 
   it('does not treat a different enchantment variant in inventory as a recipe requirement', () => {
@@ -421,6 +459,19 @@ describe('market sources, order accounting, and persistence validation', () => {
     expect(gameCatalog.filter((item) => item.id.includes('DRAGON') && !/_LEATHER_DRAGON$/.test(item.id)).some((item) => item.recipes.some((recipe) => recipe.id.endsWith(':fire-scales')))).toBe(false);
   });
 
+  it('requires two secondary creature materials for shapeshifter staff recipes', () => {
+    const shapeshifterStaffs = gameCatalog.filter((item) => /^T[4-8]_2H_SHAPESHIFTER_(?!CRYSTAL)/.test(item.id));
+    expect(shapeshifterStaffs.length).toBeGreaterThan(0);
+    for (const item of shapeshifterStaffs) {
+      for (const recipe of item.recipes) {
+        const secondary = recipe.materials.find((material) => /^T[3-7]_ALCHEMY_RARE_/.test(material.id));
+        if (secondary) expect(secondary.count, `${item.name} (${recipe.id})`).toBe(2);
+      }
+    }
+    const bloodmoon = shapeshifterStaffs.find((item) => item.id === 'T5_2H_SHAPESHIFTER_MORGANA')!;
+    expect(bloodmoon.recipes[0].materials.find((material) => material.id === 'T5_ALCHEMY_RARE_WEREWOLF')).toMatchObject({ name: 'Fine Werewolf Fangs', count: 2 });
+  });
+
   it('does not apply RRR to Fire Dragon Scales in the Dragonslayer alternative recipe', () => {
     const jacket = gameCatalog.find((item) => item.id === 'T4_ARMOR_LEATHER_DRAGON')!;
     const recipe = jacket.recipes.find((entry) => entry.id === 'T4_ARMOR_LEATHER_DRAGON:fire-scales')!;
@@ -445,18 +496,42 @@ describe('market sources, order accounting, and persistence validation', () => {
 
   it('labels absent, stale, and undated automatic prices distinctly', () => {
     expect(getPriceFreshness(undefined, 15)).toBe('UNAVAILABLE');
-    expect(getPriceFreshness({ buy: 200, sell: null, buyAt: null, sellAt: null, refreshedAt: '2026-01-01' }, 15)).toBe('AUTO — Unverified');
-    expect(getPriceFreshness({ buy: 200, sell: null, buyAt: '2020-01-01T00:00:00Z', sellAt: null, refreshedAt: '2020-01-01' }, 15)).toBe('AUTO — Stale');
+    expect(getPriceFreshness({ buy: 200, sell: null, buyAt: null, sellAt: null, refreshedAt: '2026-01-01' }, 15)).toContain('Unverified');
+    expect(getPriceFreshness({ buy: 200, sell: null, buyAt: '2020-01-01T00:00:00Z', sellAt: null, refreshedAt: '2020-01-01' }, 15)).toContain('Stale');
   });
 
-  it('keeps the last known price visible but stale when a refresh reports no current price', () => {
+  it('uses automatic prices at every age and labels age green through 7h, yellow through 24h, then red', () => {
+    const now = Date.parse('2026-10-19T12:00:00Z');
+    const quote = (hoursOld: number) => ({ buy: 200, sell: null, buyAt: new Date(now - hoursOld * 3_600_000).toISOString(), sellAt: null, refreshedAt: '' });
+    expect(getPriceFreshness(quote(7), 15, now, 'buy')).toContain('Fresh');
+    expect(getPriceFreshness(quote(7.1), 15, now, 'buy')).toContain('Aging');
+    expect(getPriceFreshness(quote(24), 15, now, 'buy')).toContain('Aging');
+    expect(getPriceFreshness(quote(24.1), 15, now, 'buy')).toContain('Stale');
+    expect(priceAge(quote(7).buyAt, now).tone).toBe('green');
+    expect(priceAge(quote(7.1).buyAt, now).tone).toBe('yellow');
+    expect(priceAge(quote(24).buyAt, now).tone).toBe('yellow');
+    expect(priceAge(quote(24.1).buyAt, now).tone).toBe('red');
+    expect(priceAge(null, now).tone).toBe('unknown');
+  });
+
+  it('keeps stale automatic quotes in project material cost estimates', () => {
+    const state = emptyState();
+    state.prices[priceKey('T4_METALBAR', state.settings.priceCity, state.settings.marketQuality)] = {
+      buy: 200, sell: null, buyAt: '2020-01-01T00:00:00Z', sellAt: null, refreshedAt: '2020-01-01T00:00:00Z',
+    };
+    const row = projectMaterials(state, project, catalog).find((material) => material.id === 'T4_METALBAR')!;
+    expect(row.nextPurchaseEstimate).toBe(200);
+    expect(row.remainingEstimatedCost).toBeGreaterThan(0);
+  });
+
+  it('keeps the last known price usable and ages it from its last successful update when refresh has no current price', () => {
     const now = Date.parse('2026-10-14T15:00:00Z');
     const old = { buy: 200, sell: null, buyAt: '2026-10-14T14:58:00Z', sellAt: null, refreshedAt: '2026-10-14T14:58:00Z' };
     const refreshed = mergePriceSnapshot(old, { buy: null, sell: 300, buyAt: null, sellAt: '2026-10-14T15:00:00Z', buyUnavailableAt: '2026-10-14T15:00:00Z', refreshedAt: '2026-10-14T15:00:00Z' });
     expect(refreshed.buy).toBe(200);
     expect(refreshed.buyAt).toBe(old.buyAt);
-    expect(getPriceFreshness(refreshed, 15, now, 'buy')).toBe('AUTO — Stale');
-    expect(getPriceFreshness(refreshed, 15, now, 'sell')).toBe('AUTO — Fresh');
+    expect(getPriceFreshness(refreshed, 15, now, 'buy')).toContain('Fresh');
+    expect(getPriceFreshness(refreshed, 15, now, 'sell')).toContain('Fresh');
   });
 
   it('uses manual estimates over city snapshots and switches cleanly back to automatic', () => {
@@ -561,6 +636,26 @@ describe('market sources, order accounting, and persistence validation', () => {
     expect(projectMaterials(completed, project, catalog).find((entry) => entry.id === 'T4_METALBAR')?.acquired).toBe(40);
   });
 
+  it('archives a completed order and starts a repeated order at zero while preserving its receipts', () => {
+    const source = makeOrder({ id: 'completed-old', projectId: null, city: 'Caerleon', quantity: 9990, fulfilled: 9990, received: 9990, placedAt: '2026-10-19' });
+    const otherActive = makeOrder({ id: 'other-active', projectId: null, materialId: 'T4_ARTIFACT', materialName: 'Artifact', placedAt: '2026-10-19' });
+    const state = emptyState();
+    state.orders = [source, otherActive];
+    state.purchases = [{ id: 'old-receipt', projectId: null, materialId: source.materialId, materialName: source.materialName, city: source.city, quantity: 9990, unitPrice: source.unitPrice, date: '2026-10-02', notes: '', orderId: source.id }];
+    const repeated: BuyOrder = { ...source, id: 'new-order', city: 'Bridgewatch', quantity: 9990, fulfilled: 9990, received: 9990, placedAt: '2026-10-19', archived: false };
+
+    const next = repeatBuyOrder(state, source.id, repeated)!;
+
+    expect(next.orders).toHaveLength(3);
+    expect(next.orders[0]).toMatchObject({ id: source.id, archived: true, received: 9990 });
+    expect(next.orders[2]).toMatchObject({ id: 'new-order', city: 'Caerleon', archived: false, cancelled: false, mode: 'Active', received: 0, fulfilled: 0, quantity: 9990, placedAt: '2026-10-19' });
+    expect(next.purchases).toEqual(state.purchases);
+    expect(getOrderStatus(next.orders[2])).toBe('Active');
+    expect(getOrderStatus(next.orders[0])).toBe('Archived');
+    const currentList = next.orders.slice().reverse().filter((order) => !order.archived).sort((a, b) => b.placedAt.localeCompare(a.placedAt));
+    expect(currentList[0].id).toBe('new-order');
+  });
+
   it('reverses an acquired order quantity with an auditable transaction and restores the outstanding amount', () => {
     const state = emptyState();
     state.orders = [{ id: 'reverse-order', projectId: project.id, materialId: 'T4_METALBAR', materialName: 'Metal Bar', city: 'Martlock', unitPrice: 260, quantity: 30, fulfilled: 0, received: 0, placedAt: '2026-01-01', notes: '', mode: 'Active', cancelled: false, archived: false }];
@@ -628,5 +723,12 @@ describe('market sources, order accounting, and persistence validation', () => {
   it('rejects malformed imported backups', () => {
     expect(validateState({ version: 1, projects: [] })).toBe(false);
     expect(validateState(emptyState())).toBe(true);
+  });
+
+  it('persists supported visual themes in settings and rejects unknown theme ids', () => {
+    const state = emptyState();
+    state.settings.theme = 'vellum';
+    expect(validateState(state)).toBe(true);
+    expect(validateState({ ...state, settings: { ...state.settings, theme: 'unknown-theme' } })).toBe(false);
   });
 });

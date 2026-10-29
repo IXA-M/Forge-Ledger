@@ -1,3 +1,6 @@
+import { createDefaultEnchantCraftState, validateEnchantCraftState } from './features/enchantCraft/validation';
+import type { EnchantCraftState } from './features/enchantCraft/types';
+
 export type Material = { id: string; name: string; count: number; returnable: boolean };
 export type Recipe = { id: string; label: string; outputCount: number; materials: Material[] };
 export type CatalogItem = { id: string; name: string; category: string; subcategory: string; tier: number; sourceType: string; recipes: Recipe[]; journalType?: string | null; craftingFameFactor?: number | null };
@@ -11,15 +14,19 @@ export type Project = {
   createdAt: string; deadline: string; notes: string; priority: Priority; dailyTarget: number; returnRate?: number;
   completed?: boolean; completedAt?: string | null; completionHistory?: Array<{ completedAt: string; target: number; recipeId: string }>;
   completionMaterialConsumption?: Record<string, number>; sellingPrice?: number | null;
+  sales?: SaleRecord[];
+  additionalMaterials?: Material[];
+  enchantCraft?: { targetEnchantment: 0 | 1 | 2 | 3; runeTier: number; unitsPerLevel: number | null };
   journalType?: string; journalFamePerItem?: number | null; journalsOwned?: number; journalsFilled?: number; journalsInProgress?: number; journalsBought?: number; journalsSold?: number;
 };
+export type SaleRecord = { id: string; date: string; quantity: number; amount: number; notes: string };
 export type Purchase = {
   id: string; projectId: string | null; materialId: string; materialName: string; city: string;
   quantity: number; unitPrice: number | null; date: string; notes: string; orderId?: string; reversesPurchaseId?: string; zeroPriceConfirmed?: boolean; source?: 'market-listing';
 };
 export type MaterialAllocation = { id: string; materialId: string; materialName: string; projectId: string; quantity: number; date: string; unitPriceAtAllocation: number | null; zeroPriceConfirmed?: boolean };
 export type BuyOrder = {
-  id: string; projectId: string; materialId: string; materialName: string; city: string;
+  id: string; projectId: string | null; materialId: string; materialName: string; city: string;
   unitPrice: number; quantity: number; fulfilled: number; received: number; placedAt: string;
   notes: string; mode: 'Planned' | 'Active'; cancelled: boolean; archived: boolean; zeroPriceConfirmed?: boolean; setupFees?: number;
 };
@@ -34,15 +41,17 @@ export type AutoPrice = {
   buyUnavailableAt?: string | null; sellUnavailableAt?: string | null;
 };
 export type ManualPrice = { buy: number | null; sell: number | null; updatedAt: string; zeroBuyConfirmed?: boolean; zeroSellConfirmed?: boolean };
+export type ThemeId = 'forge' | 'vellum' | 'exchange' | 'bloodmoon';
 export type Settings = {
   server: 'west' | 'east' | 'europe'; freshMinutes: number; autoRefresh: boolean;
   autoRefreshMinutes: number; applyReturnRate: boolean; returnRate: number; cities: string[]; priceCity: string;
-  extraCostPercent: number; marketQuality: number; sellingTaxPercent?: number | null;
+  extraCostPercent: number; marketQuality: number; sellingTaxPercent?: number | null; lastBuyOrderCity?: string; theme?: ThemeId;
 };
 export type AppState = {
   version: 1; settings: Settings; projects: Project[]; purchases: Purchase[];
   allocations: MaterialAllocation[]; orders: BuyOrder[]; sessions: CraftSession[]; tasks: Task[]; inventoryBalances?: InventoryBalance[];
   prices: Record<string, AutoPrice>; manualPrices: Record<string, ManualPrice>;
+  enchantCraft?: EnchantCraftState;
 };
 export type MaterialSummary = Material & {
   required: number; baseRequired: number; estimatedReturns: number; expectedRequired: number;
@@ -66,7 +75,7 @@ export type MaterialShortageSummary = Material & {
 export const CITY_OPTIONS = ['Bridgewatch', 'Caerleon', 'Fort Sterling', 'Lymhurst', 'Martlock', 'Thetford', 'Brecilien', 'Black Market'];
 export const DEFAULT_SETTINGS: Settings = {
   server: 'europe', freshMinutes: 15, autoRefresh: false, autoRefreshMinutes: 30,
-  applyReturnRate: true, returnRate: 0, cities: CITY_OPTIONS, priceCity: 'Bridgewatch', extraCostPercent: 0, marketQuality: 1, sellingTaxPercent: null,
+  applyReturnRate: true, returnRate: 0, cities: CITY_OPTIONS, priceCity: 'Bridgewatch', lastBuyOrderCity: 'Bridgewatch', extraCostPercent: 0, marketQuality: 1, sellingTaxPercent: null, theme: 'forge',
 };
 export const newId = () => crypto.randomUUID();
 export const today = () => {
@@ -99,6 +108,14 @@ export function formatMaterialName(id: string, name: string, baseNames: Readonly
 
 export function isProjectCompleted(project: Project) {
   return project.completed ?? project.crafted >= project.target;
+}
+
+export function projectSalesTotal(project: Project) {
+  return (project.sales || []).reduce((sum, sale) => sum + sale.amount, 0);
+}
+
+export function allTimeMoneyGained(projects: Project[]) {
+  return projects.reduce((sum, project) => sum + projectSalesTotal(project), 0);
 }
 
 export function materialReadiness(state: AppState, project: Project, catalog: CatalogItem[]) {
@@ -181,13 +198,22 @@ export function emptyState(): AppState {
     version: 1,
     settings: { ...DEFAULT_SETTINGS, cities: [...DEFAULT_SETTINGS.cities] },
     projects: [], purchases: [], allocations: [], orders: [], sessions: [], tasks: [], inventoryBalances: [], prices: {}, manualPrices: {},
+    enchantCraft: createDefaultEnchantCraftState(),
   };
 }
 
 export function recipeFor(project: Project, catalog: CatalogItem[]) {
   const item = catalog.find((entry) => entry.id === project.itemId);
   const recipe = item?.recipes.find((entry) => entry.id === project.recipeId) || item?.recipes[0];
-  return { item, recipe: recipe ? { ...recipe, outputCount: 1 } : undefined };
+  if (!recipe) return { item, recipe: undefined };
+  const materials = new Map(recipe.materials.map((material) => [material.id, { ...material }]));
+  for (const material of project.additionalMaterials || []) {
+    const existing = materials.get(material.id);
+    materials.set(material.id, existing
+      ? { ...existing, count: existing.count + material.count, returnable: existing.returnable || material.returnable }
+      : { ...material });
+  }
+  return { item, recipe: { ...recipe, outputCount: 1, materials: [...materials.values()] } };
 }
 
 export function recipeRequirements(recipe: Recipe, quantity: number, returnRate = 0): Map<string, Material> {
@@ -207,6 +233,7 @@ export function recipeRequirements(recipe: Recipe, quantity: number, returnRate 
 }
 
 export function projectReturnRate(state: AppState, project: Project) {
+  if (project.enchantCraft) return 0.152;
   return (project.returnRate ?? (state.settings.applyReturnRate ? state.settings.returnRate : 0)) / 100;
 }
 
@@ -240,7 +267,7 @@ function automaticSharedAllocations(state: AppState, materialId: string, catalog
   let remaining = sharedStockBeforeAutomaticReservation(state, materialId);
   const allocations = new Map<string, number>();
   const projects = [...state.projects].sort((a, b) => priorityValue(b.priority) - priorityValue(a.priority)
-    || (a.deadline || '9999').localeCompare(b.deadline || '9999') || a.createdAt.localeCompare(b.createdAt));
+    || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
   for (const project of projects) {
     if (remaining <= 0) break;
     const row = projectMaterials(state, project, catalog, false).find((entry) => entry.id === materialId);
@@ -380,7 +407,7 @@ export function materialShortageOverview(state: AppState, catalog: CatalogItem[]
     const available = entries.reduce((sum, { row }) => sum + row.available, 0);
     const stillNeeded = entries.reduce((sum, { row }) => sum + row.missing, 0);
     const neededProjectIds = new Set(entries.map(({ project }) => project.id));
-    const relatedOrders = state.orders.filter((order) => order.materialId === materialId && neededProjectIds.has(order.projectId));
+    const relatedOrders = state.orders.filter((order) => order.materialId === materialId && (order.projectId == null || neededProjectIds.has(order.projectId)));
     const orders: MaterialShortageOrder[] = relatedOrders.map((order) => ({
       ...order,
       remaining: Math.max(0, order.quantity - order.fulfilled),
@@ -457,19 +484,33 @@ export function getOrderStatus(order: BuyOrder): 'Planned' | 'Active' | 'Partial
   return order.mode;
 }
 
-export function getPriceFreshness(price: AutoPrice | undefined, freshnessMinutes: number, now = Date.now(), side: 'buy' | 'sell' | 'either' = 'either'): 'AUTO — Fresh' | 'AUTO — Stale' | 'AUTO — Unverified' | 'UNAVAILABLE' {
+/** Keep a completed order as archived history and start a fresh active repeat. */
+export function repeatBuyOrder(state: AppState, sourceOrderId: string, repeatedOrder: BuyOrder): AppState | null {
+  const source = state.orders.find((order) => order.id === sourceOrderId);
+  if (!source || source.received < source.quantity || repeatedOrder.id === sourceOrderId
+    || state.orders.some((order) => order.id === repeatedOrder.id)) return null;
+  return {
+    ...state,
+    orders: [
+      ...state.orders.map((order) => order.id === sourceOrderId ? { ...order, archived: true } : order),
+      { ...repeatedOrder, city: source.city, received: 0, fulfilled: 0, mode: 'Active', cancelled: false, archived: false },
+    ],
+  };
+}
+
+export function getPriceFreshness(price: AutoPrice | undefined, _freshnessMinutes: number, now = Date.now(), side: 'buy' | 'sell' | 'either' = 'either'): 'AUTO - Fresh' | 'AUTO - Aging' | 'AUTO - Stale' | 'AUTO - Unverified' | 'UNAVAILABLE' {
   if (!price) return 'UNAVAILABLE';
   const entries: Array<[number | null, string | null]> = side === 'buy' ? [[price.buy, price.buyAt]] : side === 'sell' ? [[price.sell, price.sellAt]] : [[price.buy, price.buyAt], [price.sell, price.sellAt]];
   const available = entries.filter(([value]) => value != null && value > 0);
   if (!available.length) return 'UNAVAILABLE';
-  if ((side !== 'sell' && price.buy != null && price.buyUnavailableAt) || (side !== 'buy' && price.sell != null && price.sellUnavailableAt)
-    || (side === 'buy' && price.buyUnavailableAt) || (side === 'sell' && price.sellUnavailableAt)) return 'AUTO — Stale';
   const timestamps = available.map(([, date]) => date ? Date.parse(date) : NaN);
-  if (timestamps.some((timestamp) => !Number.isFinite(timestamp))) return 'AUTO — Unverified';
+  if (timestamps.some((timestamp) => !Number.isFinite(timestamp))) return 'AUTO - Unverified';
   const oldest = Math.min(...timestamps);
   const age = now - oldest;
-  if (age < 0) return 'AUTO — Unverified';
-  return age <= freshnessMinutes * 60_000 ? 'AUTO — Fresh' : 'AUTO — Stale';
+  if (age < 0) return 'AUTO - Unverified';
+  if (age <= 7 * 60 * 60_000) return 'AUTO - Fresh';
+  if (age <= 24 * 60 * 60_000) return 'AUTO - Aging';
+  return 'AUTO - Stale';
 }
 
 export function mergePriceSnapshot(previous: AutoPrice | undefined, incoming: AutoPrice): AutoPrice {
@@ -564,6 +605,7 @@ export function validateState(value: unknown): value is AppState {
     || !Array.isArray(candidate.purchases) || !Array.isArray(candidate.allocations)
     || !Array.isArray(candidate.orders) || !Array.isArray(candidate.sessions) || !Array.isArray(candidate.tasks)
     || !object(candidate.prices) || !object(candidate.manualPrices)) return false;
+  if (candidate.enchantCraft != null && !validateEnchantCraftState(candidate.enchantCraft)) return false;
   const settings = candidate.settings;
   if (!['west', 'east', 'europe'].includes(settings.server) || !Array.isArray(settings.cities)
     || settings.cities.length === 0 || !settings.cities.every((city) => typeof city === 'string' && city.trim().length > 0)
@@ -575,6 +617,7 @@ export function validateState(value: unknown): value is AppState {
     || !nonnegative(settings.returnRate) || Number(settings.returnRate) > 100
     || (settings.sellingTaxPercent != null && (!nonnegative(settings.sellingTaxPercent) || Number(settings.sellingTaxPercent) > 100))
     || !nonnegative(settings.extraCostPercent) || Number(settings.extraCostPercent) > 100) return false;
+  if (settings.theme != null && !['forge', 'vellum', 'exchange', 'bloodmoon'].includes(settings.theme)) return false;
   if (!candidate.projects.every((entry) => object(entry) && typeof entry.id === 'string' && typeof entry.name === 'string'
     && typeof entry.itemId === 'string' && typeof entry.recipeId === 'string' && positiveInt(entry.target)
     && Number.isInteger(entry.crafted) && Number(entry.crafted) >= 0 && Number(entry.crafted) <= Number(entry.target)
@@ -584,7 +627,15 @@ export function validateState(value: unknown): value is AppState {
       && typeof record.completedAt === 'string' && positiveInt(record.target) && typeof record.recipeId === 'string'))
     && (entry.completionMaterialConsumption == null || object(entry.completionMaterialConsumption)
       && Object.values(entry.completionMaterialConsumption).every((count) => nonnegative(count)))
+    && (entry.additionalMaterials == null || Array.isArray(entry.additionalMaterials) && entry.additionalMaterials.every((material) => object(material)
+      && typeof material.id === 'string' && typeof material.name === 'string' && nonnegative(material.count) && typeof material.returnable === 'boolean'))
+    && (entry.enchantCraft == null || object(entry.enchantCraft) && [0, 1, 2, 3].includes(Number(entry.enchantCraft.targetEnchantment))
+      && Number.isInteger(entry.enchantCraft.runeTier) && Number(entry.enchantCraft.runeTier) >= 4 && Number(entry.enchantCraft.runeTier) <= 8
+      && (entry.enchantCraft.unitsPerLevel == null || Number.isInteger(entry.enchantCraft.unitsPerLevel) && Number(entry.enchantCraft.unitsPerLevel) >= 0 && Number(entry.enchantCraft.unitsPerLevel) <= 10000))
     && (entry.sellingPrice == null || nonnegative(entry.sellingPrice))
+    && (entry.sales == null || Array.isArray(entry.sales) && entry.sales.every((sale) => object(sale)
+      && typeof sale.id === 'string' && typeof sale.date === 'string' && positiveInt(sale.quantity)
+      && nonnegative(sale.amount) && typeof sale.notes === 'string'))
     && Number.isInteger(entry.dailyTarget) && Number(entry.dailyTarget) >= 0
     && (entry.returnRate == null || (nonnegative(entry.returnRate) && Number(entry.returnRate) <= 100))
     && (entry.journalType == null || typeof entry.journalType === 'string')
@@ -607,7 +658,7 @@ export function validateState(value: unknown): value is AppState {
     && typeof entry.materialId === 'string' && typeof entry.materialName === 'string'
     && typeof entry.projectId === 'string' && positiveInt(entry.quantity) && typeof entry.date === 'string'
     && maybePrice(entry.unitPriceAtAllocation))) return false;
-  if (!candidate.orders.every((entry) => object(entry) && typeof entry.id === 'string' && typeof entry.projectId === 'string'
+  if (!candidate.orders.every((entry) => object(entry) && typeof entry.id === 'string' && (entry.projectId == null || typeof entry.projectId === 'string')
     && typeof entry.materialId === 'string' && typeof entry.materialName === 'string' && typeof entry.city === 'string'
     && positiveInt(entry.quantity) && nonnegative(entry.unitPrice) && Number.isInteger(entry.fulfilled)
     && Number(entry.fulfilled) >= 0 && Number(entry.fulfilled) <= Number(entry.quantity)

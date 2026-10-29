@@ -2,9 +2,9 @@ import React, { useMemo, useState } from 'react';
 import { ChevronDown, Search } from 'lucide-react';
 import { formatItemName, formatTier, type CatalogItem } from '../domain';
 import { catalog, catalogById } from '../data/catalog';
-import { ItemIcon } from './SharedUi';
+import { CopyableName, ItemIcon } from './SharedUi';
 
-export function ItemPicker({ value, onChange, disabled = false }: { value: string; onChange: (item: CatalogItem | undefined) => void; disabled?: boolean }) {
+export function ItemPicker({ value, onChange, disabled = false, selectedDisplayName, copySelected = false }: { value: string; onChange: (item: CatalogItem | undefined) => void; disabled?: boolean; selectedDisplayName?: string; copySelected?: boolean }) {
   const selected = catalogById.get(value);
   const [query, setQuery] = useState(selected ? formatItemName(selected.name, selected.id) : '');
   const [open, setOpen] = useState(false);
@@ -20,6 +20,6 @@ export function ItemPicker({ value, onChange, disabled = false }: { value: strin
     {open && <div className="picker-results">{results.length ? results.map((item) => <button type="button" className="picker-option" key={item.id} onMouseDown={(event) => event.preventDefault()} onClick={() => { setQuery(formatItemName(item.name, item.id)); setOpen(false); onChange(item); }}>
       <ItemIcon id={item.id} size={38} /><span className="picker-option-title"><strong>{formatItemName(item.name, item.id)}</strong><small>{item.category} · {formatTier(item.tier, item.id)}</small></span><span className="item-id">{item.id}</span>
     </button>) : <div className="picker-empty">No craftable items found in the current catalog.</div>}</div>}
-    {selected && <div className="selected-item"><ItemIcon id={selected.id} /><span><strong>{formatItemName(selected.name, selected.id)}</strong><small>{selected.category} · {formatTier(selected.tier, selected.id)}</small></span></div>}
+    {selected && <div className="selected-item"><ItemIcon id={selected.id} /><span><strong>{copySelected ? <CopyableName name={selectedDisplayName || formatItemName(selected.name, selected.id)} /> : selectedDisplayName || formatItemName(selected.name, selected.id)}</strong><small>{selected.category} · {formatTier(selected.tier, selected.id)}</small></span></div>}
   </div>;
 }

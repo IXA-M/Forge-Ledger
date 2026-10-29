@@ -2,6 +2,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import App from './App';
+import { STORAGE_KEY } from './storage';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true;
@@ -47,5 +48,27 @@ describe('application shell', () => {
       .find((button) => button.textContent?.trim() === 'Settings')?.click());
     expect(container.textContent).toContain('Price source & freshness');
     expect(container.textContent).toContain('Protect project progress');
+
+    act(() => [...container.querySelectorAll('button')]
+      .find((button) => button.textContent?.trim() === 'Enchant Craft')?.click());
+    expect(container.textContent).toContain('Enchant Craft');
+    expect(container.textContent).toContain('Refresh automatic prices');
+    expect(container.textContent).toContain('Plan estimates');
+  });
+
+  it('switches the whole application layout theme and saves the selection', () => {
+    act(() => root.render(<App />));
+    const themePicker = container.querySelector<HTMLSelectElement>('select[aria-label="Interface style"]');
+    expect(themePicker).not.toBeNull();
+    expect(container.querySelector('.app-shell')?.getAttribute('data-theme')).toBe('forge');
+
+    act(() => {
+      if (!themePicker) throw new Error('Theme picker is missing');
+      themePicker.value = 'vellum';
+      themePicker.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    expect(container.querySelector('.app-shell')?.getAttribute('data-theme')).toBe('vellum');
+    expect(localStorage.getItem(STORAGE_KEY)).toContain('vellum');
   });
 });

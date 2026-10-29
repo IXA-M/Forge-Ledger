@@ -64,6 +64,15 @@ for (const [sourceType, group] of itemGroups) {
       const level = Number(enchantment['@enchantmentlevel'] || 0);
       if (level > 0) addRecipes(enchantment.craftingrequirements, `@${level}`);
     }
+    // Shapeshifter staffs require two secondary creature materials per item.
+    // Keep this correction across enchanted recipes when refreshing the catalog.
+    if (/^T[4-8]_2H_SHAPESHIFTER_(?!CRYSTAL)/.test(id)) {
+      for (const recipe of recipes) {
+        for (const material of recipe.materials) {
+          if (/^T[3-7]_ALCHEMY_RARE_/.test(material.id)) material.count = 2;
+        }
+      }
+    }
     // ao-bin-dumps contains the standard Dragonslayer artifact recipe separately:
     // each tiered Dragonhide artifact is crafted from 50 same-tier Fire Dragon Scales.
     // Expose that procurement path only for the three leather Dragonslayer slots.

@@ -24,7 +24,12 @@ export async function fetchMarketPrices(server: AppState['settings']['server'], 
   const updates: Record<string, AutoPrice> = {};
   const failures: string[] = [];
   const cityQuery = cities.map(encodeURIComponent).join(',');
-  const makeUrl = (ids: string[]) => `${MARKET_HOST[server]}/api/v2/stats/prices/${ids.map(encodeURIComponent).join(',')}.json?locations=${cityQuery}&qualities=${quality}`;
+  const makeUrl = (ids: string[]) => {
+    const path = `/api/v2/stats/prices/${ids.map(encodeURIComponent).join(',')}.json?locations=${cityQuery}&qualities=${quality}`;
+    // The desktop app runs on Vite locally. Proxy through the same origin so
+    // automatic price requests are not blocked by browser CORS/network rules.
+    return import.meta.env.DEV ? `/__aodp/${server}${path}` : `${MARKET_HOST[server]}${path}`;
+  };
   const chunks: string[][] = [];
   let current: string[] = [];
   for (const id of uniqueIds) {
